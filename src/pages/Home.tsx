@@ -116,7 +116,7 @@ export function Home() {
                 {/* Image Container with soft shadow and slight rotation */}
                 <div className="relative transform rotate-2 transition-transform duration-700 hover:rotate-0">
                    <img 
-                    src="https://res.cloudinary.com/dabgothkm/image/upload/v1776984931/artwork/pending/U5wYESZ92zcpcIKR86reFlv6bxw1/eyt1l0wtdfn1ggjm0fcg.png"
+                    src="https://res.cloudinary.com/debzdg106/image/upload/v1778002585/Screenshot_2026-05-05_123546_rmuarv.png"
                     className="w-full h-auto drop-shadow-[0_40px_80px_rgba(0,0,0,0.15)]"
                     alt="Hand holding VW Bus Sticker"
                     onError={(e) => {

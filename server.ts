@@ -7,6 +7,7 @@ import axios from "axios";
 import cors from "cors";
 import { SquareClient, SquareEnvironment } from "square";
 import admin from "firebase-admin";
+import { getFirestore } from "firebase-admin/firestore";
 import fs from "fs";
 
 // Initialize Firebase Admin
@@ -19,8 +20,8 @@ if (!admin.apps.length) {
 }
 
 const firestore = firebaseConfig.firestoreDatabaseId 
-  ? admin.firestore(firebaseConfig.firestoreDatabaseId)
-  : admin.firestore();
+  ? getFirestore(firebaseConfig.firestoreDatabaseId)
+  : getFirestore();
 
 console.log(`[Firebase] Initialized Firestore with Database ID: ${firebaseConfig.firestoreDatabaseId || '(default)'}`);
 
