@@ -1,0 +1,354 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() { return request.auth != null; }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    function isAdmin() {
+      return isSignedIn() && (
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        (request.auth.token.email != null && (
+          request.auth.token.email == "hello@printsocietyco.com" ||
+          request.auth.token.email == "Arlington.A.Teheran@gmail.com" ||
+          request.auth.token.email == "arlington.a.teheran@gmail.com" ||
+          request.auth.token.email.lower() == "arlington.a.teheran@gmail.com" ||
+          request.auth.token.email.lower().matches(".*arlington\\.a\\.teheran.*")
+        ))
+      );
+    }
+    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
+
+    // ====== Validations ======
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['email', 'createdAt'])
+        && data.email is string && data.email.size() <= 256
+        && data.createdAt is timestamp
+        && (!('firstName' in data) || (data.firstName is string && data.firstName.size() <= 100))
+        && (!('lastName' in data) || (data.lastName is string && data.lastName.size() <= 100))
+        && (!('updatedAt' in data) || data.updatedAt is timestamp);
+    }
+
+    function isValidOrder(data) {
+      return data.keys().hasAll(['userId', 'status', 'total', 'createdAt'])
+        && data.userId == request.auth.uid // enforcing identity
+        && data.status is string && data.status in ["DRAFT", "SUBMITTED", "PROCESSING", "SHIPPED"]
+        && data.total is number 
+        && data.createdAt is timestamp
+        && (!('items' in data) || (data.items is list && data.items.size() <= 100))
+        && (!('updatedAt' in data) || data.updatedAt is timestamp);
+    }
+
+    function isValidProof(data) {
+      return data.keys().hasAll(['orderId', 'imageUrl', 'status', 'createdAt'])
+        && data.orderId is string
+        && data.imageUrl is string && data.imageUrl.size() <= 500
+        && data.status is string && data.status in ["PENDING", "APPROVED", "REJECTED"]
+        && data.createdAt is timestamp
+        && (!('feedback' in data) || (data.feedback is string && data.feedback.size() <= 1000))
+        && (!('updatedAt' in data) || data.updatedAt is timestamp);
+    }
+
+    function isValidThread(data) {
+      return data.keys().hasAll(['subject', 'status', 'createdAt'])
+        && (!('userId' in data) || data.userId is string)
+        && (!('userEmail' in data) || (data.userEmail is string && data.userEmail.size() <= 256))
+        && (!('userName' in data) || (data.userName is string && data.userName.size() <= 100))
+        && (!('type' in data) || (data.type is string && data.type in ["CHAT", "INQUIRY"]))
+        && data.subject is string && data.subject.size() <= 200
+        && data.status is string && data.status in ["OPEN", "CLOSED"]
+        && data.createdAt is timestamp
+        && (!('updatedAt' in data) || data.updatedAt is timestamp);
+    }
+
+    function isValidMessage(data) {
+      return data.keys().hasAll(['threadId', 'content', 'createdAt'])
+        && data.threadId is string
+        && (!('senderId' in data) || data.senderId is string)
+        && (!('senderEmail' in data) || (data.senderEmail is string && data.senderEmail.size() <= 256))
+        && (!('senderName' in data) || (data.senderName is string && data.senderName.size() <= 100))
+        && data.content is string && data.content.size() <= 2000
+        && data.createdAt is timestamp;
+    }
+
+    function isValidFaq(data) {
+      return data.keys().hasAll(['question', 'status', 'createdAt'])
+        && data.question is string && data.question.size() <= 1000
+        && data.status is string && data.status in ["PENDING", "ANSWERED"]
+        && data.createdAt is timestamp
+        && (!('answer' in data) || (data.answer is string && data.answer.size() <= 5000))
+        && (!('updatedAt' in data) || data.updatedAt is timestamp);
+    }
+
+    function isValidJournal(data) {
+      return data.keys().hasAll(['title', 'content', 'createdAt'])
+        && data.title is string && data.title.size() <= 200
+        && data.content is string && data.content.size() <= 50000
+        && data.createdAt is timestamp
+        && (!('imageUrl' in data) || (data.imageUrl is string && data.imageUrl.size() <= 1000))
+        && (!('updatedAt' in data) || data.updatedAt is timestamp);
+    }
+
+    function isValidSettings(data) {
+      return data.keys().hasAll(['type', 'content', 'createdAt'])
+        && data.type is string && data.type.size() <= 100
+        && data.content is string && data.content.size() <= 50000
+        && data.createdAt is timestamp
+        && (!('updatedAt' in data) || data.updatedAt is timestamp);
+    }
+
+    function isValidReview(data) {
+      return data.keys().hasAll(['productId', 'userId', 'rating', 'comment', 'createdAt'])
+        && data.productId is string && data.productId.size() <= 128
+        && data.userId is string && data.userId.size() <= 128
+        && data.rating is number && data.rating >= 1 && data.rating <= 5
+        && data.comment is string && data.comment.size() <= 2000
+        && data.createdAt is timestamp
+        && (!('userName' in data) || (data.userName is string && data.userName.size() <= 100))
+        && (!('status' in data) || (data.status is string && data.status in ["PENDING", "APPROVED", "REJECTED"]))
+        && (!('updatedAt' in data) || data.updatedAt is timestamp);
+    }
+
+    // ====== Users ======
+    match /users/{userId} {
+      allow get: if isValidId(userId) && isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow list: if isSignedIn() && isAdmin(); // Only admins can list users. Never client-delegated.
+      
+      allow create: if isValidId(userId) 
+                    && isSignedIn()
+                    && request.auth.uid == userId
+                    && incoming().diff({}).affectedKeys().hasOnly(['email', 'createdAt', 'firstName', 'lastName', 'updatedAt'])
+                    && incoming().createdAt == request.time
+                    && isValidUser(incoming());
+      
+      allow update: if isValidId(userId) 
+                    && isSignedIn() 
+                    && (request.auth.uid == userId || isAdmin())
+                    && incoming().email == existing().email // immutable
+                    && incoming().createdAt == existing().createdAt // immutable
+                    && incoming().updatedAt == request.time
+                    && (
+                      isAdmin() ||
+                      incoming().diff(existing()).affectedKeys().hasOnly(['firstName', 'lastName', 'updatedAt'])
+                    )
+                    // We must reuse a schema check here to prevent injections. However isValidUser checks createdAt == request.time. For update, we skip the create validation and check manually.
+                    && (!('firstName' in incoming()) || (incoming().firstName is string && incoming().firstName.size() <= 100))
+                    && (!('lastName' in incoming()) || (incoming().lastName is string && incoming().lastName.size() <= 100));
+    }
+
+    match /admins/{adminId} {
+      allow read: if isSignedIn(); // needed for isAdmin check
+      // No writes except from the console
+    }
+
+    // ====== Orders ======
+    match /orders/{orderId} {
+      allow get: if isValidId(orderId) && isSignedIn() && (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+
+      allow create: if isValidId(orderId)
+                    && isSignedIn()
+                    && incoming().diff({}).affectedKeys().hasOnly(['userId', 'status', 'total', 'createdAt', 'items', 'updatedAt'])
+                    && incoming().createdAt == request.time
+                    && isValidOrder(incoming());
+      
+      allow update: if isValidId(orderId) 
+                    && isSignedIn()
+                    && incoming().userId == existing().userId
+                    && incoming().createdAt == existing().createdAt
+                    && incoming().updatedAt == request.time
+                    && (
+                      isAdmin() ||
+                      (
+                        existing().userId == request.auth.uid 
+                        // Users can only change DRAFT -> SUBMITTED. They can't mod order total
+                        && existing().status == "DRAFT"
+                        && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt', 'items', 'total'])
+                        && incoming().status in ["DRAFT", "SUBMITTED"]
+                        && (!('items' in incoming()) || (incoming().items is list && incoming().items.size() <= 100))
+                        && incoming().total is number
+                      )
+                    );
+      
+      match /proofs/{proofId} {
+        // Since orders are tracked in an external system (BigCommerce) and not fully synced to Firestore,
+        // we'll allow authenticated staff/users to fetch proofs assigned to an order.
+        allow get: if isSignedIn();
+        allow list: if isSignedIn();
+
+        allow create: if (isAdmin() || isSignedIn())
+                      && incoming().orderId == orderId
+                      && incoming().diff({}).affectedKeys().hasOnly(['orderId', 'imageUrl', 'status', 'createdAt', 'feedback', 'updatedAt'])
+                      && incoming().createdAt == request.time
+                      && isValidProof(incoming());
+
+        allow update: if isValidId(orderId) && isValidId(proofId)
+                      && isSignedIn()
+                      && incoming().orderId == existing().orderId
+                      && incoming().createdAt == existing().createdAt
+                      && incoming().imageUrl == existing().imageUrl // immutable
+                      && incoming().updatedAt == request.time
+                      && (
+                        isAdmin() ||
+                        // Users can only approve or reject and attach feedback
+                        (
+                          existing().status == "PENDING"
+                          && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'feedback', 'updatedAt'])
+                          && incoming().status in ["APPROVED", "REJECTED"]
+                          && (!('feedback' in incoming()) || (incoming().feedback is string && incoming().feedback.size() <= 1000))
+                        )
+                      );
+      }
+    }
+
+    // ====== Threads ======
+    match /threads/{threadId} {
+      allow get: if isValidId(threadId) && (isAdmin() || (isSignedIn() && existing().userId == request.auth.uid));
+      allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+
+      allow create: if isValidId(threadId)
+                    && (
+                      isAdmin() ||
+                      (isSignedIn() && incoming().userId == request.auth.uid) ||
+                      (incoming().type == "INQUIRY" && !('userId' in incoming()))
+                    )
+                    && incoming().createdAt == request.time
+                    && isValidThread(incoming());
+      
+      allow update: if isValidId(threadId)
+                    && (isAdmin() || (isSignedIn() && incoming().userId == existing().userId))
+                    && incoming().createdAt == existing().createdAt
+                    && (
+                      isAdmin() ||
+                      (
+                        isSignedIn() && existing().userId == request.auth.uid
+                        && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+                        && incoming().status in ["OPEN", "CLOSED"]
+                      )
+                    )
+                    && incoming().updatedAt == request.time;
+      
+      match /messages/{messageId} {
+        function canAccessThread() {
+          let thread = get(/databases/$(database)/documents/threads/$(threadId)).data;
+          return isAdmin() || (isSignedIn() && thread.userId == request.auth.uid);
+        }
+
+        allow get: if isValidId(threadId) && isValidId(messageId) && canAccessThread();
+        allow list: if isValidId(threadId) && canAccessThread();
+
+        allow create: if isValidId(threadId) && isValidId(messageId)
+                      && (
+                        isAdmin() || 
+                        (isSignedIn() && get(/databases/$(database)/documents/threads/$(threadId)).data.userId == request.auth.uid) ||
+                        (get(/databases/$(database)/documents/threads/$(threadId)).data.type == "INQUIRY")
+                      )
+                      && incoming().threadId == threadId
+                      && incoming().createdAt == request.time
+                      && isValidMessage(incoming());
+        // Messages are immutable once sent
+        allow update, delete: if false;
+      }
+    }
+
+    // ====== FAQs ======
+    match /faqs/{faqId} {
+      // Anyone can read ANSWERED FAQs. Admins can read all.
+      allow get: if existing().status == "ANSWERED" || isAdmin();
+      allow list: if existing().status == "ANSWERED" || isAdmin();
+      
+      // Anyone can create a PENDING FAQ.
+      allow create: if isValidId(faqId)
+                    && incoming().diff({}).affectedKeys().hasOnly(['question', 'status', 'createdAt', 'updatedAt'])
+                    && incoming().status == "PENDING"
+                    && incoming().createdAt == request.time
+                    && isValidFaq(incoming());
+
+      allow update: if isValidId(faqId)
+                    && isAdmin()
+                    && incoming().createdAt == existing().createdAt
+                    && incoming().updatedAt == request.time
+                    && incoming().diff(existing()).affectedKeys().hasOnly(['question', 'answer', 'status', 'updatedAt'])
+                    && isValidFaq(incoming());
+      
+      allow delete: if isAdmin();
+    }
+
+    // ====== Journals ======
+    match /journals/{journalId} {
+      allow get, list: if true;
+      
+      allow create: if isValidId(journalId)
+                    && isAdmin()
+                    && incoming().diff({}).affectedKeys().hasOnly(['title', 'content', 'imageUrl', 'createdAt', 'updatedAt'])
+                    && incoming().createdAt == request.time
+                    && isValidJournal(incoming());
+
+      allow update: if isValidId(journalId)
+                    && isAdmin()
+                    && incoming().createdAt == existing().createdAt
+                    && incoming().updatedAt == request.time
+                    && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'content', 'imageUrl', 'updatedAt'])
+                    && isValidJournal(incoming());
+
+      allow delete: if isAdmin();
+    }
+
+    // ====== Settings ======
+    match /settings/{settingId} {
+      allow get, list: if true;
+      
+      allow create: if isValidId(settingId)
+                    && isAdmin()
+                    && incoming().diff({}).affectedKeys().hasOnly(['type', 'content', 'createdAt', 'updatedAt'])
+                    && incoming().createdAt == request.time
+                    && isValidSettings(incoming());
+
+      allow update: if isValidId(settingId)
+                    && isAdmin()
+                    && (incoming().createdAt == existing().createdAt || isAdmin())
+                    && incoming().updatedAt == request.time
+                    && incoming().type == existing().type
+                    && incoming().diff(existing()).affectedKeys().hasOnly(['content', 'updatedAt', 'createdAt'])
+                    && isValidSettings(incoming());
+
+      allow delete: if isAdmin();
+    }
+
+    // ====== Reviews ======
+    match /reviews/{reviewId} {
+      // Anyone can see approved reviews. Admins can see all.
+      allow get: if existing().status == "APPROVED" || isAdmin() || (isSignedIn() && existing().userId == request.auth.uid);
+      allow list: if resource.data.status == "APPROVED" || isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+
+      allow create: if isValidId(reviewId)
+                    && isSignedIn()
+                    && incoming().userId == request.auth.uid
+                    && incoming().status == "APPROVED" 
+                    && incoming().createdAt == request.time
+                    && isValidReview(incoming());
+
+      allow update: if isValidId(reviewId)
+                    && (isAdmin() || (isSignedIn() && existing().userId == request.auth.uid))
+                    && incoming().productId == existing().productId
+                    && incoming().userId == existing().userId
+                    && incoming().createdAt == existing().createdAt
+                    && incoming().updatedAt == request.time
+                    && (
+                      isAdmin() ||
+                      (
+                        existing().userId == request.auth.uid
+                        && incoming().diff(existing()).affectedKeys().hasOnly(['rating', 'comment', 'updatedAt'])
+                        && isValidReview(incoming())
+                      )
+                    );
+
+      allow delete: if isAdmin() || (isSignedIn() && existing().userId == request.auth.uid);
+    }
+  }
+}
