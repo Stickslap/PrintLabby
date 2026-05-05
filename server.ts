@@ -885,7 +885,7 @@ app.get("/api/products/:id/reviews", async (req, res) => {
   const { id } = req.params;
   try {
     const config = getBCConfig();
-    if (!config) return res.status(500).json({ error: "BigCommerce is not configured" });
+    if (!config) return res.status(200).json([]);
     const { storeHash, accessToken } = config;
     const baseUrl = `https://api.bigcommerce.com/stores/${storeHash}/v3`;
 
@@ -954,7 +954,7 @@ app.get("/api/customer/reviews", async (req, res) => {
   
   try {
     const config = getBCConfig();
-    if (!config) return res.status(500).json({ error: "BigCommerce is not configured" });
+    if (!config) return res.status(200).json([]);
     const { storeHash, accessToken } = config;
     const baseUrl = `https://api.bigcommerce.com/stores/${storeHash}`;
 
@@ -1083,7 +1083,7 @@ app.get("/api/customer/profile", async (req, res) => {
     let storeHash = process.env.BIGCOMMERCE_STORE_HASH || "";
     const accessToken = process.env.BIGCOMMERCE_ACCESS_TOKEN;
     if (!accessToken || !storeHash || !email) {
-      return res.status(500).json({ error: "Missing config or email" });
+      return res.status(200).json({ credit: 0, customer_id: null, addresses: [], accepts_marketing: false, customer_group_id: 0, store_credit: 0 });
     }
 
     let baseUrl = `https://api.bigcommerce.com/stores/${storeHash}`;
@@ -3087,7 +3087,7 @@ app.get("/api/blogs", async (req, res) => {
 
 app.get("/api/journals", async (req, res) => {
   const config = getBCConfig();
-  if (!config) return res.status(500).json({ error: "BigCommerce is not configured" });
+  if (!config) return res.status(200).json([]);
 
   try {
     const response = await axios.get(`https://api.bigcommerce.com/stores/${config.storeHash}/v2/blog/posts`, {
