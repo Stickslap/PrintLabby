@@ -316,6 +316,55 @@ app.delete("/api/products/:id", async (req, res) => {
   }
 });
 
+// Categories Route
+app.get("/api/categories", async (req, res) => {
+  const bc = getBCClient();
+  if (!bc) {
+    // Return mock categories if BC not configured
+    return res.json({
+      data: [
+        { id: 1, parent_id: 0, name: "Stickers", description: "", url: "/stickers/", is_visible: true },
+        { id: 2, parent_id: 0, name: "Labels", description: "", url: "/labels/", is_visible: true },
+      ]
+    });
+  }
+  try {
+    let allCategories: any[] = [];
+    let page = 1;
+    let hasMore = true;
+    while (hasMore && page <= 5) {
+      const response = await bc.get(`/catalog/categories?limit=250&page=${page}`);
+      const data = response.data.data || [];
+      allCategories = [...allCategories, ...data];
+      const pagination = response.data.meta?.pagination;
+      if (pagination && pagination.current_page < pagination.total_pages) {
+        page++;
+      } else {
+        hasMore = false;
+      }
+    }
+    res.json({ data: allCategories });
+  } catch (error: any) {
+    console.error("BC Categories Error:", error.response?.data || error.message);
+    res.status(500).json({ error: "Failed to fetch categories", details: error.response?.data || error.message });
+  }
+});
+
+// Journals Route (Firestore)
+app.get("/api/journals", async (req, res) => {
+  if (!firestore) {
+    return res.json({ data: [] });
+  }
+  try {
+    const snapshot = await firestore.collection("journals").orderBy("createdAt", "desc").limit(50).get();
+    const journals = snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
+    res.json({ data: journals });
+  } catch (error: any) {
+    console.error("Journals fetch error:", error.message);
+    res.status(500).json({ error: "Failed to fetch journals", details: error.message });
+  }
+});
+
 // Admin API Routes
 app.get("/api/admin/stats", async (req, res) => {
   // In a real app, calculate from BigCommerce or a database
