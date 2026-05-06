@@ -5,7 +5,7 @@ import express from "express";
 import path from "path";
 import axios from "axios";
 import cors from "cors";
-import { SquareClient, SquareEnvironment } from "square";
+// Square is pure ESM — must be dynamically imported in Vercel's CJS serverless environment
 import admin from "firebase-admin";
 import { getFirestore } from "firebase-admin/firestore";
 import fs from "fs";
@@ -43,20 +43,27 @@ const firestore = (admin.apps.length && firebaseConfig.firestoreDatabaseId)
 
 console.log(`[Firebase] Initialized Firestore with Database ID: ${firebaseConfig.firestoreDatabaseId || '(default)'}`);
 
-// Initialize Square Client
-let squareClient: typeof SquareClient.prototype | null = null;
-if (process.env.SQUARE_ACCESS_TOKEN) {
-  // Check if token and application ID point to production
-  const isProduction = 
-    process.env.VITE_SQUARE_APPLICATION_ID?.startsWith('sq0idp-') || 
-    process.env.SQUARE_ACCESS_TOKEN.startsWith('EAAA') || 
-    process.env.NODE_ENV === "production";
-
-  squareClient = new SquareClient({
-    environment: isProduction ? SquareEnvironment.Production : SquareEnvironment.Sandbox,
-    token: process.env.SQUARE_ACCESS_TOKEN,
-  });
-}
+// Initialize Square Client (lazy — avoids ESM crash in CJS serverless)
+let squareClient: any = null;
+const getSquareClient = async () => {
+  if (squareClient) return squareClient;
+  if (!process.env.SQUARE_ACCESS_TOKEN) return null;
+  try {
+    const { SquareClient, SquareEnvironment } = await import('square');
+    const isProduction =
+      process.env.VITE_SQUARE_APPLICATION_ID?.startsWith('sq0idp-') ||
+      process.env.SQUARE_ACCESS_TOKEN.startsWith('EAAA') ||
+      process.env.NODE_ENV === 'production';
+    squareClient = new SquareClient({
+      environment: isProduction ? SquareEnvironment.Production : SquareEnvironment.Sandbox,
+      token: process.env.SQUARE_ACCESS_TOKEN,
+    });
+    return squareClient;
+  } catch (e) {
+    console.error('[Square] Failed to initialize:', e);
+    return null;
+  }
+};
 
 const app = express();
 export default app;
