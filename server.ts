@@ -9,39 +9,39 @@ import cors from "cors";
 import admin from "firebase-admin";
 import { getFirestore } from "firebase-admin/firestore";
 import fs from "fs";
+// firebase-admin must be lazily initialized — static imports crash in Vercel serverless
 
-// Initialize Firebase Admin
-// Prefer environment variables (required for Vercel serverless), fall back to local json file for local dev
-let firebaseConfig: { projectId: string; firestoreDatabaseId?: string } = {
-  projectId: process.env.FIREBASE_PROJECT_ID || "",
-  firestoreDatabaseId: process.env.FIREBASE_DATABASE_ID || undefined,
-};
+// Bulletproofed Firebase init — all errors caught so module never crashes at load time
+let firestore: any = null;
+try {
+  let projectId = process.env.FIREBASE_PROJECT_ID || '';
+  let firestoreDatabaseId = process.env.FIREBASE_DATABASE_ID || '';
 
-if (!firebaseConfig.projectId) {
-  // Local dev fallback: read from the json config file
-  try {
-    const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
-    const rawConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    firebaseConfig = {
-      projectId: rawConfig.projectId,
-      firestoreDatabaseId: rawConfig.firestoreDatabaseId,
-    };
-  } catch (e) {
-    console.warn('[Firebase] Could not read firebase-applet-config.json and FIREBASE_PROJECT_ID env var is not set. Firestore will be unavailable.');
+  if (!projectId) {
+    try {
+      const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
+      const raw = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      projectId = raw.projectId || '';
+      firestoreDatabaseId = raw.firestoreDatabaseId || '';
+    } catch (_) {
+      console.warn('[Firebase] firebase-applet-config.json not found and FIREBASE_PROJECT_ID not set.');
+    }
   }
+
+  if (projectId && !admin.apps.length) {
+    admin.initializeApp({ projectId });
+  }
+
+  if (admin.apps.length) {
+    firestore = firestoreDatabaseId ? getFirestore(firestoreDatabaseId) : getFirestore();
+    console.log(`[Firebase] Initialized. DB: ${firestoreDatabaseId || '(default)'}`);
+  } else {
+    console.warn('[Firebase] Not initialized — no projectId available.');
+  }
+} catch (e: any) {
+  console.error('[Firebase] Init failed — Firestore unavailable:', e.message);
+  firestore = null;
 }
-
-if (!admin.apps.length && firebaseConfig.projectId) {
-  admin.initializeApp({
-    projectId: firebaseConfig.projectId,
-  });
-}
-
-const firestore = (admin.apps.length && firebaseConfig.firestoreDatabaseId)
-  ? getFirestore(firebaseConfig.firestoreDatabaseId)
-  : admin.apps.length ? getFirestore() : null as any;
-
-console.log(`[Firebase] Initialized Firestore with Database ID: ${firebaseConfig.firestoreDatabaseId || '(default)'}`);
 
 // Initialize Square Client (lazy — avoids ESM crash in CJS serverless)
 let squareClient: any = null;
@@ -74,13 +74,56 @@ const PORT = isAIStudio ? 3000 : (process.env.PORT ? parseInt(process.env.PORT) 
 app.use(cors());
 app.use(express.json());
 
-// Health Check
-app.get("/api/health", (req, res) => {
-  const config = getBCConfig();
-  res.json({ 
-    status: "ok", 
+// Health Check — comprehensive diagnostic endpoint
+app.get("/api/health", async (req, res) => {
+  const bcConfig = getBCConfig();
+
+  // Test Firestore connectivity
+  let firestoreStatus = "not_initialized";
+  if (firestore) {
+    try {
+      await firestore.collection("_health_check").limit(1).get();
+      firestoreStatus = "connected";
+    } catch (e: any) {
+      firestoreStatus = `error: ${e.message?.slice(0, 120)}`;
+    }
+  }
+
+  // Test BigCommerce connectivity
+  let bcStatus = "not_configured";
+  if (bcConfig) {
+    try {
+      const bc = getBCClient();
+      await bc.get("/v2/store");
+      bcStatus = "connected";
+    } catch (e: any) {
+      bcStatus = `error: ${e.message?.slice(0, 120)}`;
+    }
+  }
+
+  const present = (key: string) => !!process.env[key];
+
+  res.json({
+    status: "ok",
     timestamp: new Date().toISOString(),
-    is_bigcommerce_configured: !!config 
+    node_version: process.version,
+    environment: process.env.NODE_ENV || "unknown",
+    services: {
+      bigcommerce: bcStatus,
+      firestore: firestoreStatus,
+      square: present("SQUARE_ACCESS_TOKEN") ? "token_present" : "not_configured",
+    },
+    env_vars: {
+      BIGCOMMERCE_STORE_HASH: present("BIGCOMMERCE_STORE_HASH"),
+      BIGCOMMERCE_ACCESS_TOKEN: present("BIGCOMMERCE_ACCESS_TOKEN"),
+      BIGCOMMERCE_CLIENT_ID: present("BIGCOMMERCE_CLIENT_ID"),
+      BIGCOMMERCE_CLIENT_SECRET: present("BIGCOMMERCE_CLIENT_SECRET"),
+      FIREBASE_PROJECT_ID: present("FIREBASE_PROJECT_ID"),
+      FIREBASE_DATABASE_ID: present("FIREBASE_DATABASE_ID"),
+      SQUARE_ACCESS_TOKEN: present("SQUARE_ACCESS_TOKEN"),
+      APP_URL: present("APP_URL"),
+    },
+    firestore_module_initialized: firestore !== null,
   });
 });
 
