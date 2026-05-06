@@ -11,45 +11,37 @@ import { getFirestore } from "firebase-admin/firestore";
 import fs from "fs";
 
 // Initialize Firebase Admin
-let firebaseConfig: any = {};
-try {
-  const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
-  if (fs.existsSync(configPath)) {
-    firebaseConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-  } else {
-    // Try one directory up for serverless environments
-    const upConfigPath = path.join(process.cwd(), '../firebase-applet-config.json');
-    if (fs.existsSync(upConfigPath)) {
-      firebaseConfig = JSON.parse(fs.readFileSync(upConfigPath, 'utf8'));
-    } else {
-       console.warn("firebase-applet-config.json not found, proceeding without it.");
-    }
+// Prefer environment variables (required for Vercel serverless), fall back to local json file for local dev
+let firebaseConfig: { projectId: string; firestoreDatabaseId?: string } = {
+  projectId: process.env.FIREBASE_PROJECT_ID || "",
+  firestoreDatabaseId: process.env.FIREBASE_DATABASE_ID || undefined,
+};
+
+if (!firebaseConfig.projectId) {
+  // Local dev fallback: read from the json config file
+  try {
+    const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
+    const rawConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    firebaseConfig = {
+      projectId: rawConfig.projectId,
+      firestoreDatabaseId: rawConfig.firestoreDatabaseId,
+    };
+  } catch (e) {
+    console.warn('[Firebase] Could not read firebase-applet-config.json and FIREBASE_PROJECT_ID env var is not set. Firestore will be unavailable.');
   }
-} catch (e: any) {
-  console.error("Failed to read Firebase config:", e.message);
 }
 
 if (!admin.apps.length && firebaseConfig.projectId) {
-  try {
-    admin.initializeApp({
-      projectId: firebaseConfig.projectId,
-    });
-  } catch(e) {
-    console.error("Firebase admin init failed", e);
-  }
+  admin.initializeApp({
+    projectId: firebaseConfig.projectId,
+  });
 }
 
-let firestore: any = null;
-try {
-  if (firebaseConfig.projectId) {
-    firestore = firebaseConfig.firestoreDatabaseId 
-      ? getFirestore(firebaseConfig.firestoreDatabaseId)
-      : getFirestore();
-    console.log(`[Firebase] Initialized Firestore with Database ID: ${firebaseConfig.firestoreDatabaseId || '(default)'}`);
-  }
-} catch(e) {
-  console.error("Firestore init failed", e);
-}
+const firestore = (admin.apps.length && firebaseConfig.firestoreDatabaseId)
+  ? getFirestore(firebaseConfig.firestoreDatabaseId)
+  : admin.apps.length ? getFirestore() : null as any;
+
+console.log(`[Firebase] Initialized Firestore with Database ID: ${firebaseConfig.firestoreDatabaseId || '(default)'}`);
 
 // Initialize Square Client
 let squareClient: typeof SquareClient.prototype | null = null;
@@ -82,13 +74,6 @@ app.get("/api/health", (req, res) => {
     status: "ok", 
     timestamp: new Date().toISOString(),
     is_bigcommerce_configured: !!config 
-  });
-});
-
-app.get("/api/config/square", (req, res) => {
-  res.json({
-    applicationId: process.env.VITE_SQUARE_APPLICATION_ID || process.env.SQUARE_APPLICATION_ID || "",
-    locationId: process.env.VITE_SQUARE_LOCATION_ID || process.env.SQUARE_LOCATION_ID || ""
   });
 });
 
@@ -391,23 +376,21 @@ app.get("/api/admin/orders/:id", async (req, res) => {
 
     // Fetch artwork from Firestore
     let artworkMap: any = {};
-    if (firestore) {
-      try {
-        const artworkDoc = await firestore.collection("orders").doc(id.toString()).get();
-        if (artworkDoc.exists) {
-          const data = artworkDoc.data();
-          if (data && data.artwork) {
-            data.artwork.forEach((a: any) => {
-              artworkMap[a.product_id] = {
-                url: a.artworkDataUrl,
-                notes: a.artworkNotes
-              };
-            });
-          }
+    try {
+      const artworkDoc = await firestore.collection("orders").doc(id.toString()).get();
+      if (artworkDoc.exists) {
+        const data = artworkDoc.data();
+        if (data && data.artwork) {
+          data.artwork.forEach((a: any) => {
+            artworkMap[a.product_id] = {
+              url: a.artworkDataUrl,
+              notes: a.artworkNotes
+            };
+          });
         }
-      } catch (e: any) {
-        console.error("Error fetching artwork from Firestore for admin:", e.message || e);
       }
+    } catch (e: any) {
+      console.error("Error fetching artwork from Firestore for admin:", e.message || e);
     }
 
     const formattedOrder = {
