@@ -11,19 +11,45 @@ import { getFirestore } from "firebase-admin/firestore";
 import fs from "fs";
 
 // Initialize Firebase Admin
-const firebaseConfig = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'firebase-applet-config.json'), 'utf8'));
-
-if (!admin.apps.length) {
-  admin.initializeApp({
-    projectId: firebaseConfig.projectId,
-  });
+let firebaseConfig: any = {};
+try {
+  const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
+  if (fs.existsSync(configPath)) {
+    firebaseConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  } else {
+    // Try one directory up for serverless environments
+    const upConfigPath = path.join(process.cwd(), '../firebase-applet-config.json');
+    if (fs.existsSync(upConfigPath)) {
+      firebaseConfig = JSON.parse(fs.readFileSync(upConfigPath, 'utf8'));
+    } else {
+       console.warn("firebase-applet-config.json not found, proceeding without it.");
+    }
+  }
+} catch (e: any) {
+  console.error("Failed to read Firebase config:", e.message);
 }
 
-const firestore = firebaseConfig.firestoreDatabaseId 
-  ? getFirestore(firebaseConfig.firestoreDatabaseId)
-  : getFirestore();
+if (!admin.apps.length && firebaseConfig.projectId) {
+  try {
+    admin.initializeApp({
+      projectId: firebaseConfig.projectId,
+    });
+  } catch(e) {
+    console.error("Firebase admin init failed", e);
+  }
+}
 
-console.log(`[Firebase] Initialized Firestore with Database ID: ${firebaseConfig.firestoreDatabaseId || '(default)'}`);
+let firestore: any = null;
+try {
+  if (firebaseConfig.projectId) {
+    firestore = firebaseConfig.firestoreDatabaseId 
+      ? getFirestore(firebaseConfig.firestoreDatabaseId)
+      : getFirestore();
+    console.log(`[Firebase] Initialized Firestore with Database ID: ${firebaseConfig.firestoreDatabaseId || '(default)'}`);
+  }
+} catch(e) {
+  console.error("Firestore init failed", e);
+}
 
 // Initialize Square Client
 let squareClient: typeof SquareClient.prototype | null = null;
@@ -358,21 +384,23 @@ app.get("/api/admin/orders/:id", async (req, res) => {
 
     // Fetch artwork from Firestore
     let artworkMap: any = {};
-    try {
-      const artworkDoc = await firestore.collection("orders").doc(id.toString()).get();
-      if (artworkDoc.exists) {
-        const data = artworkDoc.data();
-        if (data && data.artwork) {
-          data.artwork.forEach((a: any) => {
-            artworkMap[a.product_id] = {
-              url: a.artworkDataUrl,
-              notes: a.artworkNotes
-            };
-          });
+    if (firestore) {
+      try {
+        const artworkDoc = await firestore.collection("orders").doc(id.toString()).get();
+        if (artworkDoc.exists) {
+          const data = artworkDoc.data();
+          if (data && data.artwork) {
+            data.artwork.forEach((a: any) => {
+              artworkMap[a.product_id] = {
+                url: a.artworkDataUrl,
+                notes: a.artworkNotes
+              };
+            });
+          }
         }
+      } catch (e: any) {
+        console.error("Error fetching artwork from Firestore for admin:", e.message || e);
       }
-    } catch (e: any) {
-      console.error("Error fetching artwork from Firestore for admin:", e.message || e);
     }
 
     const formattedOrder = {
