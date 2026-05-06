@@ -42,7 +42,9 @@ if (process.env.SQUARE_ACCESS_TOKEN) {
 
 const app = express();
 export default app;
-const PORT = 3000;
+
+const isAIStudio = !!process.env.APPLET_ID;
+const PORT = isAIStudio ? 3000 : (process.env.PORT ? parseInt(process.env.PORT) : 3000);
 
 app.use(cors());
 app.use(express.json());
