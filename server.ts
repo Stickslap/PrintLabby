@@ -85,6 +85,13 @@ app.get("/api/health", (req, res) => {
   });
 });
 
+app.get("/api/config/square", (req, res) => {
+  res.json({
+    applicationId: process.env.VITE_SQUARE_APPLICATION_ID || process.env.SQUARE_APPLICATION_ID || "",
+    locationId: process.env.VITE_SQUARE_LOCATION_ID || process.env.SQUARE_LOCATION_ID || ""
+  });
+});
+
 app.get("/api/env-dump", (req, res) => {
   const envs = {};
   for (const key of Object.keys(process.env)) {

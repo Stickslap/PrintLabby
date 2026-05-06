@@ -48,8 +48,20 @@ export function Checkout() {
     expiry: '',
     cvv: ''
   });
+  const [squareConfig, setSquareConfig] = useState({ applicationId: '', locationId: '' });
 
   useEffect(() => {
+    axios.get("/api/config/square")
+      .then(res => {
+        if (typeof res.data === 'object' && res.data !== null) {
+          setSquareConfig({
+            applicationId: res.data.applicationId || '',
+            locationId: res.data.locationId || ''
+          });
+        }
+      })
+      .catch(err => console.error("Could not fetch square config", err));
+      
     if (user?.email) {
       axios.get(`/api/customer/profile?email=${encodeURIComponent(user.email)}`)
         .then(res => {
@@ -557,11 +569,11 @@ export function Checkout() {
                   <p className="text-[10px] font-black uppercase tracking-widest text-black mb-3">
                     Card Details <span className="text-red-500">*</span>
                   </p>
-                  {import.meta.env.VITE_SQUARE_APPLICATION_ID ? (
-                    <div id="sq-form-scope">
+                  {(squareConfig.applicationId || import.meta.env.VITE_SQUARE_APPLICATION_ID) ? (
+                    <div id="sq-form-scope" key={(squareConfig.applicationId || import.meta.env.VITE_SQUARE_APPLICATION_ID)}>
                     <PaymentForm
-                      applicationId={import.meta.env.VITE_SQUARE_APPLICATION_ID}
-                      locationId={import.meta.env.VITE_SQUARE_LOCATION_ID || ''}
+                      applicationId={squareConfig.applicationId || import.meta.env.VITE_SQUARE_APPLICATION_ID}
+                      locationId={squareConfig.locationId || import.meta.env.VITE_SQUARE_LOCATION_ID || ''}
                       cardTokenizeResponseReceived={handleSquareTokenization}
                     >
                       <CreditCard
@@ -592,6 +604,18 @@ export function Checkout() {
                     <div className="p-5 bg-amber-50 border border-amber-200 rounded-md text-amber-700 text-xs font-bold space-y-2">
                       <p>⚠️ Square credentials not configured.</p>
                       <p className="opacity-70 text-[10px]">Add <code>VITE_SQUARE_APPLICATION_ID</code> and <code>VITE_SQUARE_LOCATION_ID</code> to your environment variables to enable card payments.</p>
+                      <details className="mt-2 text-[10px]">
+                        <summary>Debug Info</summary>
+                        <pre className="mt-1 bg-white p-2 text-xs overflow-x-auto">
+{JSON.stringify({
+  apiConfig: squareConfig,
+  buildConfig: {
+    appId: import.meta.env.VITE_SQUARE_APPLICATION_ID || 'missing',
+    locId: import.meta.env.VITE_SQUARE_LOCATION_ID || 'missing'
+  }
+}, null, 2)}
+                        </pre>
+                      </details>
                     </div>
                   )}
                 </div>
