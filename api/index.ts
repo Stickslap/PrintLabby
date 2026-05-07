@@ -219,14 +219,23 @@ app.get("/api/journals", async (_req: Request, res: Response) => {
 
 app.post("/api/admin/staff-login", (req: Request, res: Response) => {
   const { username, password } = req.body;
-  const staffPass = process.env.STAFF_PASSWORD || "Hammock568@";
 
-  // Only the password matters for security — any non-empty username is accepted
-  if (username && password === staffPass) {
+  // Credentials are set via Vercel Environment Variables:
+  //   STAFF_USERNAME  — the login username  (default: "admin")
+  //   STAFF_PASSWORD  — the login password  (default: "Hammock568@")
+  // Change them anytime in: Vercel Dashboard → Project → Settings → Environment Variables
+  const staffUsername = (process.env.STAFF_USERNAME || "admin").trim();
+  const staffPassword = (process.env.STAFF_PASSWORD || "Hammock568@").trim();
+
+  const usernameMatch = (username || "").trim().toLowerCase() === staffUsername.toLowerCase();
+  const passwordMatch = (password || "").trim() === staffPassword;
+
+  if (usernameMatch && passwordMatch) {
     return res.json({ success: true, message: "Authentication Successful" });
   }
-  console.warn(`[Auth] Failed login. Username provided: ${!!username}, Password match: ${password === staffPass}`);
-  res.status(401).json({ error: "Invalid Security Credentials" });
+
+  console.warn(`[Auth] Failed login. Username match: ${usernameMatch}, Password match: ${passwordMatch}`);
+  res.status(401).json({ error: "Invalid credentials. Check username and password." });
 });
 
 // ─── Admin — Order Statuses ──────────────────────────────────────────────────
