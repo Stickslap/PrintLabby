@@ -5,65 +5,66 @@ import express from "express";
 import path from "path";
 import axios from "axios";
 import cors from "cors";
-// Square is pure ESM — must be dynamically imported in Vercel's CJS serverless environment
+import { SquareClient, SquareEnvironment } from "square";
 import admin from "firebase-admin";
 import { getFirestore } from "firebase-admin/firestore";
 import fs from "fs";
-// firebase-admin must be lazily initialized — static imports crash in Vercel serverless
 
-// Bulletproofed Firebase init — all errors caught so module never crashes at load time
-let firestore: any = null;
+// Initialize Firebase Admin
+let firebaseConfig: any = {};
 try {
-  let projectId = process.env.FIREBASE_PROJECT_ID || '';
-  let firestoreDatabaseId = process.env.FIREBASE_DATABASE_ID || '';
-
-  if (!projectId) {
-    try {
-      const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
-      const raw = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-      projectId = raw.projectId || '';
-      firestoreDatabaseId = raw.firestoreDatabaseId || '';
-    } catch (_) {
-      console.warn('[Firebase] firebase-applet-config.json not found and FIREBASE_PROJECT_ID not set.');
+  const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
+  if (fs.existsSync(configPath)) {
+    firebaseConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  } else {
+    // Try one directory up for serverless environments
+    const upConfigPath = path.join(process.cwd(), '../firebase-applet-config.json');
+    if (fs.existsSync(upConfigPath)) {
+      firebaseConfig = JSON.parse(fs.readFileSync(upConfigPath, 'utf8'));
+    } else {
+       console.warn("firebase-applet-config.json not found, proceeding without it.");
     }
   }
-
-  if (projectId && !admin.apps.length) {
-    admin.initializeApp({ projectId });
-  }
-
-  if (admin.apps.length) {
-    firestore = firestoreDatabaseId ? getFirestore(firestoreDatabaseId) : getFirestore();
-    console.log(`[Firebase] Initialized. DB: ${firestoreDatabaseId || '(default)'}`);
-  } else {
-    console.warn('[Firebase] Not initialized — no projectId available.');
-  }
 } catch (e: any) {
-  console.error('[Firebase] Init failed — Firestore unavailable:', e.message);
-  firestore = null;
+  console.error("Failed to read Firebase config:", e.message);
 }
 
-// Initialize Square Client (lazy — avoids ESM crash in CJS serverless)
-let squareClient: any = null;
-const getSquareClient = async () => {
-  if (squareClient) return squareClient;
-  if (!process.env.SQUARE_ACCESS_TOKEN) return null;
+if (!admin.apps.length && firebaseConfig.projectId) {
   try {
-    const { SquareClient, SquareEnvironment } = await import('square');
-    const isProduction =
-      process.env.VITE_SQUARE_APPLICATION_ID?.startsWith('sq0idp-') ||
-      process.env.SQUARE_ACCESS_TOKEN.startsWith('EAAA') ||
-      process.env.NODE_ENV === 'production';
-    squareClient = new SquareClient({
-      environment: isProduction ? SquareEnvironment.Production : SquareEnvironment.Sandbox,
-      token: process.env.SQUARE_ACCESS_TOKEN,
+    admin.initializeApp({
+      projectId: firebaseConfig.projectId,
     });
-    return squareClient;
-  } catch (e) {
-    console.error('[Square] Failed to initialize:', e);
-    return null;
+  } catch(e) {
+    console.error("Firebase admin init failed", e);
   }
-};
+}
+
+let firestore: any = null;
+try {
+  if (firebaseConfig.projectId) {
+    firestore = firebaseConfig.firestoreDatabaseId 
+      ? getFirestore(firebaseConfig.firestoreDatabaseId)
+      : getFirestore();
+    console.log(`[Firebase] Initialized Firestore with Database ID: ${firebaseConfig.firestoreDatabaseId || '(default)'}`);
+  }
+} catch(e) {
+  console.error("Firestore init failed", e);
+}
+
+// Initialize Square Client
+let squareClient: typeof SquareClient.prototype | null = null;
+if (process.env.SQUARE_ACCESS_TOKEN) {
+  // Check if token and application ID point to production
+  const isProduction = 
+    process.env.VITE_SQUARE_APPLICATION_ID?.startsWith('sq0idp-') || 
+    process.env.SQUARE_ACCESS_TOKEN.startsWith('EAAA') || 
+    process.env.NODE_ENV === "production";
+
+  squareClient = new SquareClient({
+    environment: isProduction ? SquareEnvironment.Production : SquareEnvironment.Sandbox,
+    token: process.env.SQUARE_ACCESS_TOKEN,
+  });
+}
 
 const app = express();
 export default app;
@@ -74,56 +75,13 @@ const PORT = isAIStudio ? 3000 : (process.env.PORT ? parseInt(process.env.PORT) 
 app.use(cors());
 app.use(express.json());
 
-// Health Check — comprehensive diagnostic endpoint
-app.get("/api/health", async (req, res) => {
-  const bcConfig = getBCConfig();
-
-  // Test Firestore connectivity
-  let firestoreStatus = "not_initialized";
-  if (firestore) {
-    try {
-      await firestore.collection("_health_check").limit(1).get();
-      firestoreStatus = "connected";
-    } catch (e: any) {
-      firestoreStatus = `error: ${e.message?.slice(0, 120)}`;
-    }
-  }
-
-  // Test BigCommerce connectivity
-  let bcStatus = "not_configured";
-  if (bcConfig) {
-    try {
-      const bc = getBCClient();
-      await bc.get("/v2/store");
-      bcStatus = "connected";
-    } catch (e: any) {
-      bcStatus = `error: ${e.message?.slice(0, 120)}`;
-    }
-  }
-
-  const present = (key: string) => !!process.env[key];
-
-  res.json({
-    status: "ok",
+// Health Check
+app.get("/api/health", (req, res) => {
+  const config = getBCConfig();
+  res.json({ 
+    status: "ok", 
     timestamp: new Date().toISOString(),
-    node_version: process.version,
-    environment: process.env.NODE_ENV || "unknown",
-    services: {
-      bigcommerce: bcStatus,
-      firestore: firestoreStatus,
-      square: present("SQUARE_ACCESS_TOKEN") ? "token_present" : "not_configured",
-    },
-    env_vars: {
-      BIGCOMMERCE_STORE_HASH: present("BIGCOMMERCE_STORE_HASH"),
-      BIGCOMMERCE_ACCESS_TOKEN: present("BIGCOMMERCE_ACCESS_TOKEN"),
-      BIGCOMMERCE_CLIENT_ID: present("BIGCOMMERCE_CLIENT_ID"),
-      BIGCOMMERCE_CLIENT_SECRET: present("BIGCOMMERCE_CLIENT_SECRET"),
-      FIREBASE_PROJECT_ID: present("FIREBASE_PROJECT_ID"),
-      FIREBASE_DATABASE_ID: present("FIREBASE_DATABASE_ID"),
-      SQUARE_ACCESS_TOKEN: present("SQUARE_ACCESS_TOKEN"),
-      APP_URL: present("APP_URL"),
-    },
-    firestore_module_initialized: firestore !== null,
+    is_bigcommerce_configured: !!config 
   });
 });
 
@@ -366,55 +324,6 @@ app.delete("/api/products/:id", async (req, res) => {
   }
 });
 
-// Categories Route
-app.get("/api/categories", async (req, res) => {
-  const bc = getBCClient();
-  if (!bc) {
-    // Return mock categories if BC not configured
-    return res.json({
-      data: [
-        { id: 1, parent_id: 0, name: "Stickers", description: "", url: "/stickers/", is_visible: true },
-        { id: 2, parent_id: 0, name: "Labels", description: "", url: "/labels/", is_visible: true },
-      ]
-    });
-  }
-  try {
-    let allCategories: any[] = [];
-    let page = 1;
-    let hasMore = true;
-    while (hasMore && page <= 5) {
-      const response = await bc.get(`/catalog/categories?limit=250&page=${page}`);
-      const data = response.data.data || [];
-      allCategories = [...allCategories, ...data];
-      const pagination = response.data.meta?.pagination;
-      if (pagination && pagination.current_page < pagination.total_pages) {
-        page++;
-      } else {
-        hasMore = false;
-      }
-    }
-    res.json({ data: allCategories });
-  } catch (error: any) {
-    console.error("BC Categories Error:", error.response?.data || error.message);
-    res.status(500).json({ error: "Failed to fetch categories", details: error.response?.data || error.message });
-  }
-});
-
-// Journals Route (Firestore)
-app.get("/api/journals", async (req, res) => {
-  if (!firestore) {
-    return res.json({ data: [] });
-  }
-  try {
-    const snapshot = await firestore.collection("journals").orderBy("createdAt", "desc").limit(50).get();
-    const journals = snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
-    res.json({ data: journals });
-  } catch (error: any) {
-    console.error("Journals fetch error:", error.message);
-    res.status(500).json({ error: "Failed to fetch journals", details: error.message });
-  }
-});
-
 // Admin API Routes
 app.get("/api/admin/stats", async (req, res) => {
   // In a real app, calculate from BigCommerce or a database
@@ -475,21 +384,23 @@ app.get("/api/admin/orders/:id", async (req, res) => {
 
     // Fetch artwork from Firestore
     let artworkMap: any = {};
-    try {
-      const artworkDoc = await firestore.collection("orders").doc(id.toString()).get();
-      if (artworkDoc.exists) {
-        const data = artworkDoc.data();
-        if (data && data.artwork) {
-          data.artwork.forEach((a: any) => {
-            artworkMap[a.product_id] = {
-              url: a.artworkDataUrl,
-              notes: a.artworkNotes
-            };
-          });
+    if (firestore) {
+      try {
+        const artworkDoc = await firestore.collection("orders").doc(id.toString()).get();
+        if (artworkDoc.exists) {
+          const data = artworkDoc.data();
+          if (data && data.artwork) {
+            data.artwork.forEach((a: any) => {
+              artworkMap[a.product_id] = {
+                url: a.artworkDataUrl,
+                notes: a.artworkNotes
+              };
+            });
+          }
         }
+      } catch (e: any) {
+        console.error("Error fetching artwork from Firestore for admin:", e.message || e);
       }
-    } catch (e: any) {
-      console.error("Error fetching artwork from Firestore for admin:", e.message || e);
     }
 
     const formattedOrder = {
