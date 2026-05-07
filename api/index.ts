@@ -219,12 +219,94 @@ app.get("/api/journals", async (_req: Request, res: Response) => {
 
 app.post("/api/admin/staff-login", (req: Request, res: Response) => {
   const { username, password } = req.body;
-  const staffUser = "PrintPrint LabbyCo";
   const staffPass = process.env.STAFF_PASSWORD || "Hammock568@";
-  if (username === staffUser && password === staffPass) {
+
+  // Accept multiple valid usernames (case-insensitive) for flexibility
+  const validUsernames = [
+    "print labby co",
+    "printlabbyco",
+    "printprint labbyco",
+    "admin",
+    "staff",
+  ];
+  const usernameMatch = validUsernames.includes((username || "").toLowerCase().trim());
+  const passwordMatch = password === staffPass;
+
+  if (usernameMatch && passwordMatch) {
     return res.json({ success: true, message: "Authentication Successful" });
   }
+  console.warn(`[Auth] Failed login attempt. Username: "${username}", Password match: ${passwordMatch}`);
   res.status(401).json({ error: "Invalid Security Credentials" });
+});
+
+// ─── Admin — Order Statuses ──────────────────────────────────────────────────
+
+app.get("/api/admin/order-statuses", async (_req: Request, res: Response) => {
+  const config = getBCConfig();
+  if (!config) return res.status(500).json({ error: "BigCommerce is not configured." });
+  const { storeHash, accessToken } = config;
+  try {
+    const response = await axios.get(
+      `https://api.bigcommerce.com/stores/${storeHash}/v2/order_statuses.json`,
+      { headers: { "X-Auth-Token": accessToken, Accept: "application/json" } }
+    );
+    res.json(response.data);
+  } catch (e: any) {
+    // Return a minimal fallback so the dashboard still renders
+    console.error("BC order-statuses error:", e.message);
+    res.json([
+      { id: 1, status: "Pending" },
+      { id: 2, status: "Awaiting Payment" },
+      { id: 7, status: "Awaiting Fulfillment" },
+      { id: 8, status: "Awaiting Shipment" },
+      { id: 9, status: "Awaiting Pickup" },
+      { id: 10, status: "Partially Shipped" },
+      { id: 3, status: "Shipped" },
+      { id: 4, status: "Completed" },
+      { id: 5, status: "Cancelled" },
+      { id: 6, status: "Declined" },
+      { id: 13, status: "Disputed" },
+      { id: 11, status: "Refunded" },
+    ]);
+  }
+});
+
+// ─── Admin — Shipping ─────────────────────────────────────────────────────────
+
+app.get("/api/admin/shipping/methods", (_req: Request, res: Response) => {
+  res.json([
+    { id: 1, name: "FREE SHIPPING - GROUND", status: "Active", type: "Flat Rate" },
+    { id: 2, name: "UPS GROUND TRANSIT", status: "Active", type: "Carrier" },
+    { id: 3, name: "Free Standard Shipping", status: "Active", type: "Flat Rate" },
+  ]);
+});
+
+app.get("/api/admin/shipping/orders", async (_req: Request, res: Response) => {
+  const config = getBCConfig();
+  if (!config) return res.status(500).json({ error: "BigCommerce is not configured." });
+  const { storeHash, accessToken } = config;
+  try {
+    const response = await axios.get(
+      `https://api.bigcommerce.com/stores/${storeHash}/v2/orders.json`,
+      { headers: { "X-Auth-Token": accessToken, Accept: "application/json" }, timeout: 15000 }
+    );
+    if (response.status === 204 || !response.data) return res.json([]);
+    const bcOrders = Array.isArray(response.data) ? response.data : [];
+    res.json(
+      bcOrders.map((o: any) => ({
+        id: o.id.toString(),
+        customer: o.billing_address ? `${o.billing_address.first_name} ${o.billing_address.last_name}` : "Guest",
+        shipping_method: o.shipping_method || "Standard Shipping",
+        tracking_number: "",
+        carrier: "USPS",
+        ship_date: o.date_shipped || o.date_created,
+        delivery_status: o.status === "Completed" ? "delivered" : o.status === "Shipped" ? "transit" : "pretransit",
+        status: o.status,
+      }))
+    );
+  } catch (e: any) {
+    res.status(500).json({ error: "Failed to fetch shipping orders", details: e.message });
+  }
 });
 
 // ─── Orders ───────────────────────────────────────────────────────────────────
