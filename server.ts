@@ -69,7 +69,8 @@ if (process.env.SQUARE_ACCESS_TOKEN) {
 const app = express();
 export default app;
 
-const PORT = 3000;
+const isAIStudio = !!process.env.APPLET_ID;
+const PORT = isAIStudio ? 3000 : (process.env.PORT ? parseInt(process.env.PORT) : 3000);
 
 app.use(cors());
 app.use(express.json());
@@ -81,13 +82,6 @@ app.get("/api/health", (req, res) => {
     status: "ok", 
     timestamp: new Date().toISOString(),
     is_bigcommerce_configured: !!config 
-  });
-});
-
-app.get("/api/config/square", (req, res) => {
-  res.json({
-    applicationId: process.env.VITE_SQUARE_APPLICATION_ID || process.env.SQUARE_APPLICATION_ID || "",
-    locationId: process.env.VITE_SQUARE_LOCATION_ID || process.env.SQUARE_LOCATION_ID || ""
   });
 });
 
@@ -2583,28 +2577,19 @@ app.post("/api/checkout/process", async (req, res) => {
           shipping_method: "Standard Shipping"
         }
       ],
-      products: cart.map((item: any) => {
-        const productOptions = item.selectedOptions 
-          ? Object.entries(item.selectedOptions).map(([id, val]) => ({
-              id: Number(id),
-              value: String(val)
-            }))
-          : undefined;
-
-        return {
-          product_id: Number(item.id),
-          variant_id: item.variant_id ? Number(item.variant_id) : undefined,
-          product_options: productOptions && productOptions.length > 0 ? productOptions : undefined,
-          quantity: Number(item.quantity),
-          name: item.name || "Custom Sticker",
-          price_inc_tax: Number(item.price) || 0,
-          price_ex_tax: Number(item.price) || 0
-        };
-      }),
+      products: cart.map((item: any) => ({
+        product_id: Number(item.id),
+        variant_id: item.variant_id ? Number(item.variant_id) : undefined,
+        quantity: Number(item.quantity),
+        name: item.name || "Custom Sticker",
+        price_inc_tax: Number(item.price) || 0,
+        price_ex_tax: Number(item.price) || 0
+      })),
       status_id: 0, // Incomplete
       customer_message: customer_message || "Custom Checkout Order",
       external_id: `WEB-${Date.now()}`,
-      discount_amount: bcCheckout ? bcCheckout.cart_level_discount_total : 0
+      discount_amount: bcCheckout ? bcCheckout.cart_level_discount_total : 0,
+      coupons: bcCheckout?.coupons ? bcCheckout.coupons.map((c: any) => ({ code: c.code })) : []
     };
 
     console.log("Sending V2 Order Data:", JSON.stringify(orderData, null, 2));
@@ -2753,7 +2738,7 @@ app.post("/api/checkout/process", async (req, res) => {
           const sqRes = await squareClient.checkout.paymentLinks.create({
               idempotencyKey: `sq-link-${orderId}-${Date.now()}`,
               quickPay: {
-                locationId: process.env.VITE_SQUARE_LOCATION_ID || process.env.SQUARE_LOCATION_ID || "",
+                locationId: process.env.VITE_SQUARE_LOCATION_ID || "",
                 name: `Store Order #${orderId}`,
                 priceMoney: { amount: BigInt(Math.round(totalAmount * 100)), currency: 'USD' }
               },
@@ -2864,24 +2849,13 @@ app.post("/api/checkout/process", async (req, res) => {
     
     if (Array.isArray(errorDetail)) {
       // V2 often returns an array [ { status, message } ]
-      const messages = errorDetail.map((e: any) => {
-        if (e.details?.errors && Array.isArray(e.details.errors)) {
-          return e.details.errors.map((err: any) => err.message || e.message).join(", ");
-        }
-        return e.message || errorMessage;
-      });
-      errorMessage = messages.join(" | ");
+      errorMessage = errorDetail[0]?.message || errorMessage;
     } else if (errorDetail?.errors) {
       // V3 format
       errorMessage = Object.values(errorDetail.errors).join(", ") || errorMessage;
     } else if (errorDetail?.message) {
       // Single object format
       errorMessage = errorDetail.message;
-    }
-
-    // Add a hint if it's an options error that the user needs to clear their cart
-    if (errorMessage.includes("options") || errorMessage.includes("MandatoryProductOptions")) {
-      errorMessage = "Invalid product options in your cart. Please clear your cart and add the items again.";
     }
 
     res.status(422).json({ 

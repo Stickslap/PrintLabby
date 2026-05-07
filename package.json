@@ -4,9 +4,9 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "start": "node dist/server.cjs",
+    "start": "tsx server.ts",
     "dev": "tsx server.ts",
-    "build": "vite build && esbuild server.ts --bundle --platform=node --target=node22 --format=cjs --outfile=dist/server.cjs --external:express --external:cors --external:dotenv --external:axios --external:firebase-admin --external:square --external:vite",
+    "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit"
@@ -45,7 +45,6 @@
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
     "autoprefixer": "^10.4.21",
-    "esbuild": "^0.28.0",
     "eslint": "^10.2.1",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
