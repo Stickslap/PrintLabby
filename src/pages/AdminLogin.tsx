@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { signInWithGoogle, auth, logout, signInAnonymouslyWithFirebase, db } from "../lib/firebase";
-import { collection, addDoc, serverTimestamp } from "firebase/firestore";
+import { signInWithGoogle, auth, logout } from "../lib/firebase";
 import { motion } from "motion/react";
 import { Shield, ArrowLeft, Lock } from "lucide-react";
 import toast from "react-hot-toast";
@@ -24,45 +23,16 @@ export function AdminLogin() {
     setLoading(true);
     
     try {
-      // 1. Verify credentials via secure server route
+      // Verify credentials via secure server route
       const response = await axios.post("/api/admin/staff-login", { username, password });
       
       if (response.data.success) {
-        // 2. Try to establish a Firebase session (optional — fails gracefully if Firebase Anonymous Auth is not enabled)
-        try {
-          await signInAnonymouslyWithFirebase();
-        } catch (firebaseErr) {
-          console.warn("Firebase anonymous auth unavailable — using localStorage session only.", firebaseErr);
-        }
-        
-        try {
-          await addDoc(collection(db, "admin_login_logs"), {
-            email: username,
-            success: true,
-            method: "STAFF_LOGIN",
-            createdAt: serverTimestamp()
-          });
-        } catch (logErr) {
-          console.error("Failed to log admin login", logErr);
-        }
-
         localStorage.setItem("staff_authenticated", "true");
         localStorage.setItem("staff_session_time", Date.now().toString());
         toast.success("Staff Authentication Successful");
         navigate("/admin");
       }
     } catch (err: any) {
-      try {
-        await addDoc(collection(db, "admin_login_logs"), {
-          email: username,
-          success: false,
-          method: "STAFF_LOGIN",
-          errorMessage: err.response?.data?.error || "Invalid Security Credentials",
-          createdAt: serverTimestamp()
-        });
-      } catch (logErr) {
-        console.error("Failed to log admin login", logErr);
-      }
       toast.error(err.response?.data?.error || "Invalid Security Credentials");
     } finally {
       setLoading(false);

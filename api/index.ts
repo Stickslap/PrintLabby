@@ -221,21 +221,11 @@ app.post("/api/admin/staff-login", (req: Request, res: Response) => {
   const { username, password } = req.body;
   const staffPass = process.env.STAFF_PASSWORD || "Hammock568@";
 
-  // Accept multiple valid usernames (case-insensitive) for flexibility
-  const validUsernames = [
-    "print labby co",
-    "printlabbyco",
-    "printprint labbyco",
-    "admin",
-    "staff",
-  ];
-  const usernameMatch = validUsernames.includes((username || "").toLowerCase().trim());
-  const passwordMatch = password === staffPass;
-
-  if (usernameMatch && passwordMatch) {
+  // Only the password matters for security — any non-empty username is accepted
+  if (username && password === staffPass) {
     return res.json({ success: true, message: "Authentication Successful" });
   }
-  console.warn(`[Auth] Failed login attempt. Username: "${username}", Password match: ${passwordMatch}`);
+  console.warn(`[Auth] Failed login. Username provided: ${!!username}, Password match: ${password === staffPass}`);
   res.status(401).json({ error: "Invalid Security Credentials" });
 });
 
