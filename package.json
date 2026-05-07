@@ -4,9 +4,9 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "start": "tsx server.ts",
+    "start": "node dist/server.cjs",
     "dev": "tsx server.ts",
-    "build": "vite build",
+    "build": "vite build && esbuild server.ts --bundle --platform=node --target=node22 --format=cjs --outfile=dist/server.cjs --external:express --external:cors --external:dotenv --external:axios --external:firebase-admin --external:square --external:vite",
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit"
@@ -36,7 +36,6 @@
     "react-square-web-payments-sdk": "^3.3.0",
     "square": "^44.0.1",
     "tailwind-merge": "^3.5.0",
-    "tsx": "^4.21.0",
     "vite": "^6.2.0",
     "zustand": "^5.0.12"
   },
@@ -46,8 +45,10 @@
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
     "autoprefixer": "^10.4.21",
+    "esbuild": "^0.28.0",
     "eslint": "^10.2.1",
     "tailwindcss": "^4.1.14",
+    "tsx": "^4.21.0",
     "typescript": "~5.8.2",
     "vite": "^6.2.0",
     "vitest": "^4.1.5"

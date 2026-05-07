@@ -4,7 +4,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { useAuth } from '../lib/AuthContext';
 import axios from 'axios';
-import { PaymentForm, CreditCard } from 'react-square-web-payments-sdk';
+
 import { motion } from 'motion/react';
 
 // Global type for BigCommerce SDK
@@ -48,7 +48,7 @@ export function Checkout() {
     expiry: '',
     cvv: ''
   });
-  const [squareConfig, setSquareConfig] = useState({ applicationId: '', locationId: '' });
+  const [squareConfig, setSquareConfig] = useState({ applicationId: '', locationId: '', loaded: false });
 
   useEffect(() => {
     axios.get("/api/config/square")
@@ -56,11 +56,15 @@ export function Checkout() {
         if (typeof res.data === 'object' && res.data !== null) {
           setSquareConfig({
             applicationId: res.data.applicationId || '',
-            locationId: res.data.locationId || ''
+            locationId: res.data.locationId || '',
+            loaded: true
           });
         }
       })
-      .catch(err => console.error("Could not fetch square config", err));
+      .catch(err => {
+        console.error("Could not fetch square config", err);
+        setSquareConfig(prev => ({ ...prev, loaded: true }));
+      });
       
     if (user?.email) {
       axios.get(`/api/customer/profile?email=${encodeURIComponent(user.email)}`)
@@ -163,7 +167,7 @@ export function Checkout() {
     formData.state !== 'State' &&
     formData.zip.length >= 5;
 
-  const handleSquareTokenization = async (token: any) => {
+  const handleLinkPayment = async () => {
     if (formData.state === 'State') {
       toast.error('Please select a state before completing your order.');
       return;
@@ -172,17 +176,13 @@ export function Checkout() {
       toast.error('Please fill in all required fields.');
       return;
     }
-    if (!token?.token) {
-      toast.error('Card tokenisation failed. Please try again.');
-      return;
-    }
 
     setIsProcessing(true);
     try {
       const response = await axios.post('/api/checkout/process', {
         cart,
-        nonce: token.token,
         email: formData.email,
+        payment_method: 'link', // This requests a Square Payment Link
         requestedCredit: useRewards ? appliedCredit : 0,
         shipping_address: {
           first_name: formData.firstName,
@@ -198,8 +198,8 @@ export function Checkout() {
         checkoutId: checkoutId,
       });
 
-      if (response.data?.success) {
-        // Save summary for success page
+      if (response.data?.success && response.data?.paymentUrl) {
+        // Save summary for success page before redirecting
         localStorage.setItem('recentOrderSummary', JSON.stringify({
           orderId: response.data.orderId,
           items: cart,
@@ -209,10 +209,11 @@ export function Checkout() {
           total: finalTotal
         }));
 
-        toast.success('Order placed successfully!');
-        navigate(`/order-success?id=${response.data.orderId}`);
+        setCheckoutUrl(response.data.paymentUrl);
+        setShowVault(true);
+        setIsProcessing(false);
       } else {
-        toast.error(response.data?.error || 'Payment failed. Please try again.');
+        toast.error(response.data?.error || 'Failed to generate payment link. Please try again.');
         setIsProcessing(false);
       }
     } catch (error: any) {
@@ -309,33 +310,26 @@ export function Checkout() {
             </header>
             
             <div className="flex-1 relative bg-gray-50 flex flex-col items-center justify-center">
-              {/* Fallback Message (Visible if iframe is blocked by BC X-Frame-Options) */}
-              <div className="absolute inset-0 flex flex-col items-center justify-center p-8 text-center pointer-events-none opacity-20">
-                <p className="text-sm font-black uppercase tracking-widest text-black mb-2">Syncing Square Gateway...</p>
-                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest max-w-xs">
-                  If redirect does not start automatically, please click the button below.
+              <div className="flex flex-col items-center justify-center p-8 text-center max-w-md mx-auto">
+                <div className="w-16 h-16 bg-green-100 text-green-600 rounded-full flex items-center justify-center mb-6 shadow-sm">
+                  <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7"></path></svg>
+                </div>
+                <h3 className="text-2xl font-black uppercase tracking-tight text-black mb-2">Payment Link Ready</h3>
+                <p className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-10 leading-relaxed">
+                  Your order has been saved. Please click the button below to complete your payment securely via Square.
                 </p>
-              </div>
-
-              {/* The Vault Frame */}
-              <iframe 
-                src={checkoutUrl}
-                className="w-full h-full border-none relative z-10"
-                title="Secure Payment"
-                allow="payment"
-              />
-
-              {/* Emergency Unlock Button (In case of "Refused to connect") */}
-              <div className="absolute bottom-12 left-1/2 -translate-x-1/2 z-20 flex flex-col items-center gap-4">
                 <button 
-                  onClick={() => window.open(checkoutUrl, '_blank')}
-                  className="bg-primary text-black px-8 py-4 rounded-full text-[10px] font-black uppercase tracking-[0.2em] shadow-2xl hover:scale-105 transition-all active:scale-95"
+                  onClick={() => {
+                    if (window.top && window.top !== window) {
+                      window.open(checkoutUrl, '_blank');
+                    } else {
+                      window.location.href = checkoutUrl;
+                    }
+                  }}
+                  className="w-full bg-black text-white px-8 py-5 rounded-full text-xs font-black uppercase tracking-[0.2em] shadow-xl hover:bg-gray-800 hover:scale-105 transition-all active:scale-95"
                 >
-                  🚀 UNLOCK SECURE CHECKOUT TAB
+                  Proceed to Square Checkout
                 </button>
-                <p className="bg-white/90 backdrop-blur px-4 py-2 rounded-lg text-[9px] font-bold text-gray-400 uppercase tracking-widest border border-gray-100 shadow-sm">
-                  Click if the panel above is blank (Security Sync)
-                </p>
               </div>
             </div>
           </div>
@@ -564,60 +558,19 @@ export function Checkout() {
                   />
                 </div>
 
-                {/* Square Card Fields */}
-                <div>
-                  <p className="text-[10px] font-black uppercase tracking-widest text-black mb-3">
-                    Card Details <span className="text-red-500">*</span>
-                  </p>
-                  {(squareConfig.applicationId || import.meta.env.VITE_SQUARE_APPLICATION_ID) ? (
-                    <div id="sq-form-scope" key={(squareConfig.applicationId || import.meta.env.VITE_SQUARE_APPLICATION_ID)}>
-                    <PaymentForm
-                      applicationId={squareConfig.applicationId || import.meta.env.VITE_SQUARE_APPLICATION_ID}
-                      locationId={squareConfig.locationId || import.meta.env.VITE_SQUARE_LOCATION_ID || ''}
-                      cardTokenizeResponseReceived={handleSquareTokenization}
-                    >
-                      <CreditCard
-                        buttonProps={{
-                          isLoading: isProcessing,
-                          css: {
-                            width: '100%',
-                            backgroundColor: isAddressComplete ? '#000000' : '#9ca3af',
-                            color: '#ffffff',
-                            padding: '18px 0',
-                            borderRadius: '6px',
-                            fontSize: '13px',
-                            fontWeight: '900',
-                            textTransform: 'uppercase',
-                            letterSpacing: '0.12em',
-                            border: 'none',
-                            cursor: isAddressComplete ? 'pointer' : 'not-allowed',
-                            marginTop: '1.5rem',
-                            transition: 'all 0.2s ease',
-                          },
-                        }}
-                      >
-                        {isProcessing ? 'PROCESSING…' : `PLACE ORDER — $${finalTotal.toFixed(2)}`}
-                      </CreditCard>
-                    </PaymentForm>
-                    </div>
-                  ) : (
-                    <div className="p-5 bg-amber-50 border border-amber-200 rounded-md text-amber-700 text-xs font-bold space-y-2">
-                      <p>⚠️ Square credentials not configured.</p>
-                      <p className="opacity-70 text-[10px]">Add <code>VITE_SQUARE_APPLICATION_ID</code> and <code>VITE_SQUARE_LOCATION_ID</code> to your environment variables to enable card payments.</p>
-                      <details className="mt-2 text-[10px]">
-                        <summary>Debug Info</summary>
-                        <pre className="mt-1 bg-white p-2 text-xs overflow-x-auto">
-{JSON.stringify({
-  apiConfig: squareConfig,
-  buildConfig: {
-    appId: import.meta.env.VITE_SQUARE_APPLICATION_ID || 'missing',
-    locId: import.meta.env.VITE_SQUARE_LOCATION_ID || 'missing'
-  }
-}, null, 2)}
-                        </pre>
-                      </details>
-                    </div>
-                  )}
+                {/* Make Payment Button */}
+                <div className="mt-8">
+                  <button
+                    type="button"
+                    disabled={!isAddressComplete || isProcessing}
+                    onClick={handleLinkPayment}
+                    className={`w-full py-[18px] rounded-md text-[13px] font-black uppercase tracking-[0.12em] transition-all 
+                      ${isAddressComplete 
+                        ? 'bg-black text-white hover:bg-gray-800' 
+                        : 'bg-gray-400 text-white cursor-not-allowed'}`}
+                  >
+                    {isProcessing ? 'GENERATING PAYMENT LINK…' : `PAY WITH SQUARE — $${finalTotal.toFixed(2)}`}
+                  </button>
                 </div>
 
                 <div className="flex items-start gap-3 mt-6 px-1">
