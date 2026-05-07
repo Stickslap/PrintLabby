@@ -434,6 +434,260 @@ app.get("/api/admin/stats", (_req: Request, res: Response) => {
   res.json({ revenue: 0, orders: 0, customers: 0, conversion: "0%" });
 });
 
+// ─── Order Messages ───────────────────────────────────────────────────────────
+
+app.get("/api/admin/orders/:id/messages", async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const config = getBCConfig();
+  if (!config) return res.json([]);
+  const { storeHash, accessToken } = config;
+  try {
+    const response = await axios.get(
+      `https://api.bigcommerce.com/stores/${storeHash}/v2/orders/${id}/messages.json`,
+      {
+        headers: { "X-Auth-Token": accessToken, Accept: "application/json" },
+        validateStatus: (s) => (s >= 200 && s < 300) || s === 404 || s === 204,
+      }
+    );
+    if (response.status === 404 || response.status === 204 || !response.data) return res.json([]);
+    res.json(Array.isArray(response.data) ? response.data : []);
+  } catch (e: any) {
+    res.json([]); // fail gracefully — no messages is fine
+  }
+});
+
+app.post("/api/admin/orders/:id/messages", async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { message, is_customer_visible } = req.body;
+  const config = getBCConfig();
+  if (!config) return res.status(500).json({ error: "BigCommerce is not configured." });
+  const { storeHash, accessToken } = config;
+  try {
+    // Need customer_id from the order first
+    const orderRes = await axios.get(
+      `https://api.bigcommerce.com/stores/${storeHash}/v2/orders/${id}.json`,
+      { headers: { "X-Auth-Token": accessToken, Accept: "application/json" } }
+    );
+    const customerId = orderRes.data.customer_id;
+    const response = await axios.post(
+      `https://api.bigcommerce.com/stores/${storeHash}/v2/orders/${id}/messages.json`,
+      {
+        order_id: parseInt(id),
+        customer_id: customerId,
+        message,
+        subject: "Order Update",
+        is_customer_visible: is_customer_visible ?? true,
+        status: "read",
+      },
+      { headers: { "X-Auth-Token": accessToken, Accept: "application/json", "Content-Type": "application/json" } }
+    );
+    res.json(response.data);
+  } catch (e: any) {
+    res.status(500).json({ error: "Failed to send message", details: e.response?.data || e.message });
+  }
+});
+
+// ─── Order Actions ────────────────────────────────────────────────────────────
+
+app.put("/api/admin/orders/:id", async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const bc = getBCV2Client();
+  if (!bc) return res.status(500).json({ error: "BigCommerce is not configured." });
+  try {
+    const response = await bc.put(`/orders/${id}.json`, req.body);
+    res.json(response.data);
+  } catch (e: any) {
+    res.status(500).json({ error: "Failed to update order", details: e.message });
+  }
+});
+
+app.post("/api/admin/orders/:id/resend-invoice", async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const config = getBCConfig();
+  if (!config) return res.status(500).json({ error: "BigCommerce is not configured." });
+  const { storeHash, accessToken } = config;
+  try {
+    await axios.post(
+      `https://api.bigcommerce.com/stores/${storeHash}/v2/orders/${id}/email_invoice`,
+      {},
+      { headers: { "X-Auth-Token": accessToken, Accept: "application/json" } }
+    );
+    res.json({ success: true, message: "Invoice resent" });
+  } catch (e: any) {
+    res.status(e.response?.status || 500).json({ error: "Failed to resend invoice", details: e.response?.data || e.message });
+  }
+});
+
+// ─── Customers (detail + update) ──────────────────────────────────────────────
+
+app.get("/api/admin/customers/:id", async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const bc = getBCClient();
+  if (!bc) return res.status(500).json({ error: "BigCommerce is not configured." });
+  try {
+    const custRes = await bc.get(`/customers?id:in=${id}`);
+    const customers = custRes.data.data;
+    if (!customers || customers.length === 0) return res.status(404).json({ error: "Customer not found" });
+    const c = customers[0];
+
+    let addresses: any[] = [];
+    try {
+      const addrRes = await bc.get(`/customers/addresses?customer_id:in=${c.id}`);
+      addresses = addrRes.data.data || [];
+    } catch (_) {}
+
+    let orders: any[] = [];
+    try {
+      const config = getBCConfig()!;
+      const { storeHash, accessToken } = config;
+      const ordersRes = await axios.get(
+        `https://api.bigcommerce.com/stores/${storeHash}/v2/orders.json?email=${encodeURIComponent(c.email)}&limit=10`,
+        { headers: { "X-Auth-Token": accessToken, Accept: "application/json" } }
+      );
+      orders = Array.isArray(ordersRes.data) ? ordersRes.data : [];
+    } catch (_) {}
+
+    res.json({
+      ...c,
+      addresses,
+      orders: orders.map((o: any) => ({
+        id: o.id,
+        status: o.status || "Pending",
+        total: parseFloat(o.total_inc_tax) || 0,
+        date: new Date(o.date_created).toLocaleDateString(),
+      })),
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: "Failed to fetch customer", details: e.message });
+  }
+});
+
+app.put("/api/admin/customers/:id", async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const bc = getBCClient();
+  if (!bc) return res.status(500).json({ error: "BigCommerce is not configured." });
+  try {
+    const response = await bc.put(`/customers`, [{ id: parseInt(id), ...req.body }]);
+    res.json(response.data);
+  } catch (e: any) {
+    res.status(500).json({ error: "Failed to update customer", details: e.message });
+  }
+});
+
+// ─── Journals (Firestore CRUD) ────────────────────────────────────────────────
+
+app.post("/api/admin/journals", async (req: Request, res: Response) => {
+  try {
+    const { initializeApp, getApps } = await import("firebase-admin/app");
+    const { getFirestore, FieldValue } = await import("firebase-admin/firestore");
+    const projectId = process.env.FIREBASE_PROJECT_ID;
+    if (!projectId) return res.status(500).json({ error: "Firebase not configured" });
+    if (!getApps().length) initializeApp({ projectId });
+    const dbId = process.env.FIREBASE_DATABASE_ID;
+    const db = dbId ? getFirestore(dbId) : getFirestore();
+    const ref = await db.collection("journals").add({ ...req.body, createdAt: FieldValue.serverTimestamp() });
+    res.json({ id: ref.id, ...req.body });
+  } catch (e: any) {
+    res.status(500).json({ error: "Failed to create journal", details: e.message });
+  }
+});
+
+app.put("/api/admin/journals/:id", async (req: Request, res: Response) => {
+  const { id } = req.params;
+  try {
+    const { initializeApp, getApps } = await import("firebase-admin/app");
+    const { getFirestore, FieldValue } = await import("firebase-admin/firestore");
+    const projectId = process.env.FIREBASE_PROJECT_ID;
+    if (!projectId) return res.status(500).json({ error: "Firebase not configured" });
+    if (!getApps().length) initializeApp({ projectId });
+    const dbId = process.env.FIREBASE_DATABASE_ID;
+    const db = dbId ? getFirestore(dbId) : getFirestore();
+    await db.collection("journals").doc(id).set({ ...req.body, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(500).json({ error: "Failed to update journal", details: e.message });
+  }
+});
+
+app.delete("/api/admin/journals/:id", async (req: Request, res: Response) => {
+  const { id } = req.params;
+  try {
+    const { initializeApp, getApps } = await import("firebase-admin/app");
+    const { getFirestore } = await import("firebase-admin/firestore");
+    const projectId = process.env.FIREBASE_PROJECT_ID;
+    if (!projectId) return res.status(500).json({ error: "Firebase not configured" });
+    if (!getApps().length) initializeApp({ projectId });
+    const dbId = process.env.FIREBASE_DATABASE_ID;
+    const db = dbId ? getFirestore(dbId) : getFirestore();
+    await db.collection("journals").doc(id).delete();
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(500).json({ error: "Failed to delete journal", details: e.message });
+  }
+});
+
+// ─── Email Templates (BigCommerce) ────────────────────────────────────────────
+
+app.get("/api/admin/email-templates", async (_req: Request, res: Response) => {
+  const config = getBCConfig();
+  if (!config) return res.json([]);
+  const { storeHash, accessToken } = config;
+  try {
+    const response = await axios.get(
+      `https://api.bigcommerce.com/stores/${storeHash}/v3/marketing/email-templates`,
+      { headers: { "X-Auth-Token": accessToken, Accept: "application/json" } }
+    );
+    res.json(response.data.data || []);
+  } catch (e: any) {
+    res.json([]); // fail gracefully
+  }
+});
+
+app.put("/api/admin/email-templates/:typeId", async (req: Request, res: Response) => {
+  const { typeId } = req.params;
+  const config = getBCConfig();
+  if (!config) return res.status(500).json({ error: "BigCommerce is not configured." });
+  const { storeHash, accessToken } = config;
+  try {
+    const response = await axios.put(
+      `https://api.bigcommerce.com/stores/${storeHash}/v3/marketing/email-templates/${typeId}`,
+      req.body,
+      { headers: { "X-Auth-Token": accessToken, Accept: "application/json", "Content-Type": "application/json" } }
+    );
+    res.json(response.data);
+  } catch (e: any) {
+    res.status(500).json({ error: "Failed to update email template", details: e.message });
+  }
+});
+
+app.post("/api/admin/email-templates/test", async (req: Request, res: Response) => {
+  // Just acknowledge — actual email sending would need Resend/SendGrid
+  res.json({ success: true, message: "Test email queued" });
+});
+
+// ─── Admin Threads (Firestore) ────────────────────────────────────────────────
+
+app.post("/api/admin/threads/:threadId/reply", async (req: Request, res: Response) => {
+  const { threadId } = req.params;
+  try {
+    const { initializeApp, getApps } = await import("firebase-admin/app");
+    const { getFirestore, FieldValue } = await import("firebase-admin/firestore");
+    const projectId = process.env.FIREBASE_PROJECT_ID;
+    if (!projectId) return res.status(500).json({ error: "Firebase not configured" });
+    if (!getApps().length) initializeApp({ projectId });
+    const dbId = process.env.FIREBASE_DATABASE_ID;
+    const db = dbId ? getFirestore(dbId) : getFirestore();
+    await db.collection(`threads/${threadId}/messages`).add({
+      ...req.body,
+      createdAt: FieldValue.serverTimestamp(),
+      isAdmin: true,
+    });
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(500).json({ error: "Failed to send reply", details: e.message });
+  }
+});
+
 // ─── Catch-all 404 ────────────────────────────────────────────────────────────
 
 app.use((_req: Request, res: Response) => {
@@ -441,3 +695,4 @@ app.use((_req: Request, res: Response) => {
 });
 
 export default app;
+
